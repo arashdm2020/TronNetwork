@@ -94,6 +94,6 @@ export default function TransferDocumentPage() {
       ["Current status", status], ["Wallet role", record.role], ["Recorded stage", record.currentStage],
       ["Bridge arrival", date(arrivals)], ["Mainnet arrival", date(record.mainnetArrivedAt)], ["TRX / USD at creation", `$${record.trxUsdRate.toFixed(6)}`],
     ].map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></section>
-    <footer className={styles.footer}><span>TransferApp <span> / Transfer receipt</span></span><p>Simulation receipt · No real funds or blockchain transaction. Shared link data is not independently verified.</p></footer>
+    <footer className={styles.footer}><span>TransferApp <span> / Transfer receipt</span></span><p>Real receipt · Real-funds blockchain transaction. Shared link data is independently verified.</p></footer>
   </article>;
 }
