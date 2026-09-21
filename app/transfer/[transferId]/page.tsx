@@ -2,73 +2,98 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
-import { SectionTitle, StatusBadge } from "@/components/shell";
+import { useEffect, useState } from "react";
 import { decodeTransferRecord, transferDocumentPath } from "@/lib/transfer-link";
-import { TransferFlow } from "@/components/transfer-flow";
 import { useTransferStore } from "@/store/transfer-store";
+import styles from "./receipt.module.css";
 
-const formatDate = (value: number | null) => value ? new Date(value).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" }) : "Pending";
-const formatAmount = (value: number) => value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const tronScanAddressUrl = (value: string) => `https://tronscan.org/#/address/${encodeURIComponent(value)}`;
+const amount = (value: number) => value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const date = (value: number | null) => value ? new Date(value).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "UTC" }) + " UTC" : "Pending";
+const countdown = (ms: number) => {
+  const seconds = Math.max(0, Math.ceil(ms / 1000));
+  return [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60].map(n => String(n).padStart(2, "0")).join(":");
+};
+
+function CopyButton({ value, label, primary = false }: { value: () => string; label: string; primary?: boolean }) {
+  const [state, setState] = useState<"idle" | "copied" | "error">("idle");
+  useEffect(() => {
+    if (state === "idle") return;
+    const timer = window.setTimeout(() => setState("idle"), 3500);
+    return () => window.clearTimeout(timer);
+  }, [state]);
+  return <span className={styles.copyControl}><button type="button" className={primary ? styles.primary : styles.button} onClick={async () => {
+    try { await navigator.clipboard.writeText(value()); setState("copied"); }
+    catch { setState("error"); }
+  }}>{state === "copied" ? "✓ Copied" : label}</button><span role="status" className={styles.copyMessage}>{state === "error" ? "Copy unavailable. Select and copy the text manually." : state === "copied" ? "Copied to clipboard." : ""}</span></span>;
+}
 
 export default function TransferDocumentPage() {
   const [hydrated, setHydrated] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [now, setNow] = useState(0);
   const [sharedRecord, setSharedRecord] = useState<ReturnType<typeof decodeTransferRecord>>(null);
   const localDatabase = useTransferStore(s => s.localDatabase);
-  const params = useParams<{ transferId: string }>();
-  const transferId = decodeURIComponent(params.transferId || "");
+  const history = useTransferStore(s => s.transferHistory);
+  const { transferId } = useParams<{ transferId: string }>();
 
   useEffect(() => {
-    setHydrated(true);
-    setNow(Date.now());
-    const interval = window.setInterval(() => setNow(Date.now()), 1000);
     const shared = decodeTransferRecord(new URLSearchParams(window.location.search).get("data"));
-    if (shared?.transferId === transferId) setSharedRecord(shared);
+    setSharedRecord(shared?.transferId === transferId ? shared : null);
+    setNow(Date.now());
+    setHydrated(true);
+    const interval = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(interval);
   }, [transferId]);
 
-  const localRecord = useMemo(() => Object.values(localDatabase).find(item => item.transferId === transferId), [localDatabase, transferId]);
-  const record = sharedRecord || localRecord;
+  const record = sharedRecord || history?.find(item => item.transferId === transferId) || Object.values(localDatabase).find(item => item.transferId === transferId);
+  if (!hydrated) return <div className={styles.page}><div className={styles.empty} role="status"><div className={styles.label}>TRANSFER RECEIPT</div><h1>Loading your receipt</h1><p>Preparing transfer details…</p></div></div>;
+  if (!record) return <div className={styles.page}><div className={styles.empty}><div className={styles.label}>TRANSFER RECEIPT</div><h1>Receipt unavailable</h1><p>Open the complete document link provided by the sender to view this transfer.</p><Link className={styles.button} href="/transfer">Back to Transfer</Link></div></div>;
 
-  if (!hydrated) return <div className="py-12 text-sm text-slate-500">Loading transfer document…</div>;
-  if (!record) return <div className="py-12"><SectionTitle eyebrow="Transfer document" title="Document not found" description="This transfer link is missing its transfer data." /><Link href="/transfer" className="inline-flex rounded-xl bg-cyan px-4 py-3 text-sm font-bold text-ink">Back to Transfer</Link></div>;
+  const failed = record.status === "failed";
+  const complete = record.status === "completed";
+  const reached = complete || Boolean(record.bridgeReachedAt) || (!failed && now >= record.bridgeEtaAt);
+  const ratio = Math.min(1, Math.max(0, (now - record.startedAt) / Math.max(1, record.bridgeEtaAt - record.startedAt)));
+  const progress = complete ? 100 : failed ? Math.min(100, record.processedAmount / Math.max(1, record.trxAmount) * 100) : ratio * record.bridgeProgressTarget;
+  const processed = complete ? record.trxAmount : failed ? record.processedAmount : record.trxAmount * progress / 100;
+  const status = failed ? "Transfer paused" : complete ? "Completed" : reached ? "At the bridge" : "In progress";
+  const arrivals = record.bridgeReachedAt || (reached ? record.bridgeEtaAt : null);
+  const wallets = [{ title: "Sender wallet", subtitle: "Origin address", address: record.senderWallet }, { title: "Receiver wallet", subtitle: "Destination address", address: record.receiverWallet }];
 
-  const elapsed = Math.max(0, now - record.startedAt);
-  const durationMs = record.durationHours * 60 * 60 * 1000;
-  const progress = Math.min(record.bridgeProgressTarget, (elapsed / durationMs) * record.bridgeProgressTarget);
-  const bridgeReached = Boolean(record.bridgeReachedAt) || now >= record.bridgeEtaAt;
-  const amountProcessed = Math.min(record.trxAmount, record.trxAmount * progress / 100);
-  const statusLabel = record.status === "completed" ? "Completed" : record.status === "failed" ? "Failed" : bridgeReached ? "Reached bridge" : "In progress";
-  const copyDocumentLink = async () => {
-    await navigator.clipboard.writeText(`${window.location.origin}${transferDocumentPath(record)}`);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1800);
-  };
+  return <article className={styles.page}>
+    <div className={styles.toolbar}><Link href="/transfer" className={styles.back}>← Transfer overview</Link><span className={styles.label}>SHARED TRANSFER RECEIPT</span></div>
+    <header className={styles.heading}><div><h1>Transfer receipt<span>.</span></h1><p>Your transfer details and progress, in one place.</p></div><CopyButton primary label="Copy receipt link ↗" value={() => window.location.origin + transferDocumentPath(record)} /></header>
+    <section className={styles.summary} aria-label="Transfer summary">
+      <div className={styles.summaryTop}><span className={styles.label}>TRANSFER AMOUNT</span><span className={styles.status} data-state={failed ? "failed" : reached ? "done" : "active"}><i />{status}</span></div>
+      <div className={styles.amount}>{amount(record.trxAmount)} <span>TRX</span></div>
+      <p className={styles.usd}>≈ ${amount(record.trxAmount * record.trxUsdRate)} <span>USD · rate at creation</span></p>
+      <div className={styles.metadata}><div><span className={styles.label}>RECEIPT ID</span><strong className={styles.mono}>{record.transferId}</strong></div><div><span className={styles.label}>CREATED AT</span><strong>{date(record.startedAt)}</strong></div><div><span className={styles.label}>ASSET</span><strong><span className={styles.assetDot}>T</span> TRON <span className={styles.muted}>/ TRX</span></strong></div></div>
+    </section>
 
-  return <div className="py-2">
-    <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
-      <SectionTitle eyebrow="Transfer document" title="Transfer certificate" description="A persistent, read-only record of this live vault transfer." />
-      <StatusBadge status={statusLabel} />
-    </div>
-    <div className="glass mb-6 rounded-2xl p-6 md:p-8"><div className="mb-2 font-semibold text-white">Live transfer movement</div><div className="mb-5 text-xs text-slate-500">This animation follows the saved transfer time and stops at the Gateway / Bridge.</div><TransferFlow active={record.status === "running" && !bridgeReached} record={record} showDocumentLink={false} /><div className="flex items-center justify-between gap-4 border-t border-line pt-5"><div><div className="eyebrow">Progress toward bridge</div><div className="mt-1 text-xs text-slate-500">{progress.toFixed(2)}% · {amountProcessed.toLocaleString("en-US", { maximumFractionDigits: 2 })} TRX processed</div></div><div className="text-xl font-semibold text-cyan">{progress.toFixed(2)}%</div></div><div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-800"><div style={{ width: `${progress}%` }} className="h-full rounded-full bg-gradient-to-r from-violet-400 via-cyan to-mint transition-[width] duration-1000" /></div></div>
-    <div className="glass overflow-hidden rounded-2xl">
-      <div className="border-b border-line bg-white/[.02] p-6 md:p-8">
-        <div className="flex flex-col justify-between gap-6 md:flex-row md:items-end">
-          <div><div className="eyebrow mb-3">Document ID</div><div className="mono text-xl font-semibold text-cyan">{record.transferId}</div><div className="mt-2 text-xs text-slate-500">Created {formatDate(record.startedAt)}</div></div>
-          <div className="text-left md:text-right"><div className="eyebrow mb-2">Transfer amount</div><div className="text-4xl font-semibold tracking-tight text-white">{formatAmount(record.trxAmount)} <span className="text-xl text-cyan">TRX</span></div><div className="mt-1 text-sm text-slate-400">≈ ${formatAmount(record.trxAmount * record.trxUsdRate)} USD</div></div>
+    <div className={styles.mainGrid}>
+      <section className={styles.panel} aria-labelledby="journey-title">
+        <div className={styles.sectionHeading}><div><span className={styles.label}>TRANSFER JOURNEY</span><h2 id="journey-title">{failed ? "Transfer needs attention" : reached ? "Bridge window reached" : "On the way to the bridge"}</h2></div><span className={styles.stage}>01 — 03</span></div>
+        <p className={styles.description}>{failed ? "Processing is paused. Contact the sender for an updated receipt." : complete ? "The saved record marks this transfer as completed." : reached ? "The bridge processing window has ended. Mainnet arrival is still pending." : "Processing follows the original transfer schedule. This receipt updates automatically."}</p>
+        <div className={styles.route} aria-label="Private network to bridge; blockchain pending">
+          <div className={styles.track}><div className={styles.travel} data-moving={!failed && !reached} /></div>
+          {[["⌂", "Private network", "Source"], ["⇄", "Gateway / Bridge", reached ? "Window reached" : "Processing"], ["◇", "Blockchain", complete ? "Completed" : "Pending"]].map(([icon, title, subtitle], index) => <div key={title} className={styles.node} data-state={index === 2 ? complete ? "done" : "pending" : failed ? "pending" : reached ? "done" : "active"}><div className={styles.nodeIcon} aria-hidden="true">{icon}</div><strong>{title}</strong><span>{subtitle}</span></div>)}
         </div>
-      </div>
-      <div className="grid gap-5 p-6 md:grid-cols-2 md:p-8">
-        <div className="rounded-2xl border border-line bg-black/20 p-5"><div className="eyebrow mb-4">Wallet route</div><dl className="space-y-4 text-sm"><div className="flex items-start justify-between gap-5"><dt className="shrink-0 text-slate-500">Sender wallet</dt><dd className="min-w-0 text-right"><a href={tronScanAddressUrl(record.senderWallet)} target="_blank" rel="noreferrer" className="mono break-all text-cyan underline decoration-cyan/30 underline-offset-4 transition hover:text-white">{record.senderWallet}</a><a href={tronScanAddressUrl(record.senderWallet)} target="_blank" rel="noreferrer" className="mt-1 block text-xs text-slate-500 transition hover:text-cyan">View on TronScan ↗</a></dd></div><div className="flex items-start justify-between gap-5"><dt className="shrink-0 text-slate-500">Receiver wallet</dt><dd className="min-w-0 text-right"><a href={tronScanAddressUrl(record.receiverWallet)} target="_blank" rel="noreferrer" className="mono break-all text-cyan underline decoration-cyan/30 underline-offset-4 transition hover:text-white">{record.receiverWallet}</a><a href={tronScanAddressUrl(record.receiverWallet)} target="_blank" rel="noreferrer" className="mt-1 block text-xs text-slate-500 transition hover:text-cyan">View on TronScan ↗</a></dd></div><div className="flex justify-between gap-4"><dt className="text-slate-500">Wallet role</dt><dd className="text-white">{record.role}</dd></div></dl></div>
-        <div className="rounded-2xl border border-line bg-black/20 p-5"><div className="eyebrow mb-4">Transfer status</div><dl className="space-y-4 text-sm"><div className="flex justify-between gap-4"><dt className="text-slate-500">Current stage</dt><dd className="text-right text-white">{record.currentStage}</dd></div><div className="flex justify-between gap-4"><dt className="text-slate-500">Amount processed</dt><dd className="text-white">{formatAmount(record.processedAmount)} TRX</dd></div><div className="flex justify-between gap-4"><dt className="text-slate-500">Bridge amount</dt><dd className="text-amber-200">{formatAmount(record.bridgeAmount)} TRX</dd></div></dl></div>
-        <div className="rounded-2xl border border-line bg-black/20 p-5"><div className="eyebrow mb-4">Transfer timeline</div><dl className="space-y-4 text-sm"><div className="flex justify-between gap-4"><dt className="text-slate-500">Transfer created</dt><dd className="text-right text-white">{formatDate(record.startedAt)}</dd></div><div className="flex justify-between gap-4"><dt className="text-slate-500">Bridge arrival</dt><dd className="text-right text-amber-200">{formatDate(record.bridgeReachedAt)}</dd></div><div className="flex justify-between gap-4"><dt className="text-slate-500">Mainnet arrival</dt><dd className="text-right text-mint">{formatDate(record.mainnetArrivedAt)}</dd></div></dl></div>
-        <div className="rounded-2xl border border-line bg-black/20 p-5"><div className="eyebrow mb-4">Configured live</div><dl className="space-y-4 text-sm"><div className="flex justify-between gap-4"><dt className="text-slate-500">Time until bridge</dt><dd className="text-white">{record.durationHours} hours</dd></div><div className="flex justify-between gap-4"><dt className="text-slate-500">Progress target</dt><dd className="text-white">{record.bridgeProgressTarget}%</dd></div><div className="flex justify-between gap-4"><dt className="text-slate-500">Network fee</dt><dd className="text-white">Live configured</dd></div></dl></div>
-      </div>
-      <div className="flex flex-wrap gap-3 border-t border-line p-6 md:p-8"><button onClick={copyDocumentLink} className="rounded-xl bg-cyan px-4 py-3 text-sm font-bold text-ink">{copied ? "Link copied" : "Copy document link"}</button><Link href="/transfer" className="rounded-xl border border-line px-4 py-3 text-sm font-semibold text-slate-300 transition hover:border-cyan/40 hover:text-white">Back to Transfer</Link></div>
+        <div className={styles.progressHeading}><div><h3>Progress toward bridge</h3><p>{amount(processed)} TRX processed</p></div><strong>{progress.toFixed(2)}<span>%</span></strong></div>
+        <div className={styles.progress} role="progressbar" aria-label="Transfer processing progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Number(progress.toFixed(2))}><div style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} /></div>
+        <div className={styles.progressFoot}><span>Based on the saved schedule</span><span>Bridge target <strong>{record.bridgeProgressTarget.toFixed(2)}%</strong></span></div>
+      </section>
+      <aside className={styles.schedule} aria-label="Transfer schedule">
+        <span className={styles.label}>TIME UNTIL BRIDGE</span><div className={styles.countdown}>{failed ? "Paused" : countdown(record.bridgeEtaAt - now)}</div><p>{reached ? "Bridge window reached" : `${record.durationHours}-hour processing window`}</p>
+        <ol className={styles.events}>{[{ label: "Transfer created", value: date(record.startedAt), done: true }, { label: "Expected at bridge", value: date(record.bridgeEtaAt), done: reached }, { label: "Mainnet arrival", value: date(record.mainnetArrivedAt), done: Boolean(record.mainnetArrivedAt) }].map(item => <li key={item.label} data-done={item.done}><i /><div><strong>{item.label}</strong><span>{item.value}</span></div></li>)}</ol>
+      </aside>
     </div>
-    <div className="mt-5 rounded-xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-xs text-amber-100">Live document — no real funds or blockchain transaction is represented.</div>
-  </div>;
+
+    <section className={styles.panel} aria-labelledby="wallet-title"><div className={styles.sectionHeading}><div><span className={styles.label}>WALLET ROUTE</span><h2 id="wallet-title">From sender to receiver</h2></div><span className={styles.stage}>TRON ADDRESS DETAILS</span></div>
+      <div className={styles.walletGrid}>{wallets.map((wallet, index) => <div className={styles.wallet} key={wallet.title}><div className={styles.walletHeader}><span className={styles.walletIcon} aria-hidden="true">{index === 0 ? "↗" : "↙"}</span><div><h3>{wallet.title}</h3><p>{wallet.subtitle}</p></div></div><a className={styles.address} href={`https://tronscan.org/#/address/${encodeURIComponent(wallet.address)}`} target="_blank" rel="noopener noreferrer">{wallet.address}</a><div className={styles.walletActions}><a href={`https://tronscan.org/#/address/${encodeURIComponent(wallet.address)}`} target="_blank" rel="noopener noreferrer">View on TronScan ↗</a><CopyButton label="Copy address" value={() => wallet.address} /></div></div>)}</div>
+    </section>
+
+    <section className={styles.panel} aria-labelledby="details-title"><div className={styles.sectionHeading}><div><span className={styles.label}>RECORD DETAILS</span><h2 id="details-title">Transfer information</h2></div></div><dl className={styles.details}>{[
+      ["Current status", status], ["Wallet role", record.role], ["Recorded stage", record.currentStage],
+      ["Bridge arrival", date(arrivals)], ["Mainnet arrival", date(record.mainnetArrivedAt)], ["TRX / USD at creation", `$${record.trxUsdRate.toFixed(6)}`],
+    ].map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></section>
+    <footer className={styles.footer}><span>TransferApp <span> / Transfer receipt</span></span><p>Simulation receipt · No real funds or blockchain transaction. Shared link data is not independently verified.</p></footer>
+  </article>;
 }
