@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #080b12; color: #e8eef7; font-family: Arial, Helvetica, sans-serif; }
+button, input, select, textarea { font: inherit; }
+button { cursor: pointer; }
+.grid-bg { background-image: linear-gradient(rgba(126,146,175,.045) 1px, transparent 1px), linear-gradient(90deg, rgba(126,146,175,.045) 1px, transparent 1px); background-size: 34px 34px; }
+.glass { background: rgba(17,23,34,.78); border: 1px solid #263243; box-shadow: 0 20px 80px rgba(0,0,0,.16); backdrop-filter: blur(14px); }
+.eyebrow { color: #7f91aa; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; font-weight: 700; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+@keyframes dash { to { stroke-dashoffset: -1000; } }
+.flow-dash { animation: dash 18s linear infinite; }
+@keyframes pulse-ring { 0%, 100% { opacity: .25; transform: scale(.9); } 50% { opacity: .8; transform: scale(1.06); } }
+.pulse-ring { animation: pulse-ring 2.6s ease-in-out infinite; }
