@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { SectionTitle, StatusBadge } from "@/components/shell";
 import { decodeTransferRecord, transferDocumentPath } from "@/lib/transfer-link";
+import { TransferFlow } from "@/components/transfer-flow";
 import { useTransferStore } from "@/store/transfer-store";
 
 const formatDate = (value: number | null) => value ? new Date(value).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" }) : "Pending";
@@ -14,6 +15,7 @@ const maskWallet = (value: string) => value.length > 18 ? `${value.slice(0, 10)}
 export default function TransferDocumentPage() {
   const [hydrated, setHydrated] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [now, setNow] = useState(0);
   const [sharedRecord, setSharedRecord] = useState<ReturnType<typeof decodeTransferRecord>>(null);
   const localDatabase = useTransferStore(s => s.localDatabase);
   const params = useParams<{ transferId: string }>();
@@ -21,8 +23,11 @@ export default function TransferDocumentPage() {
 
   useEffect(() => {
     setHydrated(true);
+    setNow(Date.now());
+    const interval = window.setInterval(() => setNow(Date.now()), 1000);
     const shared = decodeTransferRecord(new URLSearchParams(window.location.search).get("data"));
     if (shared?.transferId === transferId) setSharedRecord(shared);
+    return () => window.clearInterval(interval);
   }, [transferId]);
 
   const localRecord = useMemo(() => Object.values(localDatabase).find(item => item.transferId === transferId), [localDatabase, transferId]);
@@ -31,7 +36,12 @@ export default function TransferDocumentPage() {
   if (!hydrated) return <div className="py-12 text-sm text-slate-500">Loading transfer document…</div>;
   if (!record) return <div className="py-12"><SectionTitle eyebrow="Transfer document" title="Document not found" description="This transfer link is missing its transfer data." /><Link href="/transfer" className="inline-flex rounded-xl bg-cyan px-4 py-3 text-sm font-bold text-ink">Back to Transfer</Link></div>;
 
-  const statusLabel = record.status === "completed" ? "Completed" : record.status === "failed" ? "Failed" : record.bridgeReachedAt ? "Reached bridge" : "In progress";
+  const elapsed = Math.max(0, now - record.startedAt);
+  const durationMs = record.durationHours * 60 * 60 * 1000;
+  const progress = Math.min(record.bridgeProgressTarget, (elapsed / durationMs) * record.bridgeProgressTarget);
+  const bridgeReached = Boolean(record.bridgeReachedAt) || now >= record.bridgeEtaAt;
+  const amountProcessed = Math.min(record.trxAmount, record.trxAmount * progress / 100);
+  const statusLabel = record.status === "completed" ? "Completed" : record.status === "failed" ? "Failed" : bridgeReached ? "Reached bridge" : "In progress";
   const copyDocumentLink = async () => {
     await navigator.clipboard.writeText(`${window.location.origin}${transferDocumentPath(record)}`);
     setCopied(true);
@@ -43,6 +53,7 @@ export default function TransferDocumentPage() {
       <SectionTitle eyebrow="Transfer document" title="Transfer certificate" description="A persistent, read-only record of this simulated vault transfer." />
       <StatusBadge status={statusLabel} />
     </div>
+    <div className="glass mb-6 rounded-2xl p-6 md:p-8"><div className="mb-2 font-semibold text-white">Live transfer movement</div><div className="mb-5 text-xs text-slate-500">This animation follows the saved transfer time and stops at the Gateway / Bridge.</div><TransferFlow active={record.status === "running" && !bridgeReached} record={record} showDocumentLink={false} /><div className="flex items-center justify-between gap-4 border-t border-line pt-5"><div><div className="eyebrow">Progress toward bridge</div><div className="mt-1 text-xs text-slate-500">{progress.toFixed(2)}% · {amountProcessed.toLocaleString("en-US", { maximumFractionDigits: 2 })} TRX processed</div></div><div className="text-xl font-semibold text-cyan">{progress.toFixed(2)}%</div></div><div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-800"><div style={{ width: `${progress}%` }} className="h-full rounded-full bg-gradient-to-r from-violet-400 via-cyan to-mint transition-[width] duration-1000" /></div></div>
     <div className="glass overflow-hidden rounded-2xl">
       <div className="border-b border-line bg-white/[.02] p-6 md:p-8">
         <div className="flex flex-col justify-between gap-6 md:flex-row md:items-end">
