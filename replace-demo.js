@@ -1,13 +1,25 @@
 const fs = require('fs');
 const path = require('path');
 
-const ignoredDirs = ['node_modules', '.next', '.git', 'dist', 'build', 'coverage', '.vscode', '.idea', 'out'];
-const validExtensions = [
-    '.js', '.jsx', '.ts', '.tsx', '.json', '.mjs', '.cjs',
-    '.css', '.scss', '.sass', '.less',
-    '.html', '.md', '.mdx', '.txt',
-    '.yaml', '.yml', '.svg', '.env'
-];
+const ignoredDirs = ['node_modules', '.next', '.git', 'dist', 'build', 'coverage', '.vscode', '.idea', 'out', '.cache'];
+const binaryExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.woff', '.woff2', '.ttf', '.eot', '.mp4', '.webm', '.zip', '.gz', '.pdf', '.jar', '.class'];
+
+function isBinary(filePath) {
+    const ext = path.extname(filePath).toLowerCase();
+    if (binaryExtensions.includes(ext)) return true;
+    try {
+        const fd = fs.openSync(filePath, 'r');
+        const buffer = Buffer.alloc(8000);
+        const bytesRead = fs.readSync(fd, buffer, 0, 8000, 0);
+        fs.closeSync(fd);
+        for (let i = 0; i < bytesRead; i++) {
+            if (buffer[i] === 0) return true;
+        }
+    } catch (e) {
+        return true;
+    }
+    return false;
+}
 
 function replacer(match) {
     const live = 'live';
@@ -20,31 +32,35 @@ function replacer(match) {
 }
 
 function processFile(filePath) {
+    if (isBinary(filePath)) return;
+    
+    let originalContent;
     try {
-        let originalContent = fs.readFileSync(filePath, 'utf8');
-        let content = originalContent;
+        originalContent = fs.readFileSync(filePath, 'utf8');
+    } catch (e) {
+        return;
+    }
 
-        const paths = [];
-        const pathRegex = /((?:from\s+|import\s*\(?\s*|require\s*\(\s*)['"])([^'"]+)(['"])/g;
-        
-        content = content.replace(pathRegex, (match, prefix, p, suffix) => {
-            paths.push(p);
-            return `${prefix}___PROTECTED_PATH_${paths.length - 1}___${suffix}`;
-        });
+    let content = originalContent;
+    const paths = [];
+    
+    const pathRegex = /((?:from\s+|import\s*\(?\s*|require\s*\(\s*|src\s*=\s*|href\s*=\s*|url\(\s*)['"]?)([^'")]+)(['"]?)/g;
+    
+    content = content.replace(pathRegex, (match, prefix, p, suffix) => {
+        paths.push(p);
+        return `${prefix}___PROTECTED_PATH_${paths.length - 1}___${suffix}`;
+    });
 
-        const wordRegex = /\b(demo|simulated|simulation|simulate)\b/gi;
-        content = content.replace(wordRegex, replacer);
+    const wordRegex = /\b(live|live|live|live)\b/gi;
+    content = content.replace(wordRegex, replacer);
 
-        content = content.replace(/___PROTECTED_PATH_(\d+)___/g, (match, index) => {
-            return paths[parseInt(index, 10)];
-        });
+    content = content.replace(/___PROTECTED_PATH_(\d+)___/g, (match, index) => {
+        return paths[parseInt(index, 10)];
+    });
 
-        if (content !== originalContent) {
-            fs.writeFileSync(filePath, content, 'utf8');
-            console.log(`Updated: ${filePath}`);
-        }
-    } catch (error) {
-        console.error(`Error processing file ${filePath}:`, error.message);
+    if (content !== originalContent) {
+        fs.writeFileSync(filePath, content, 'utf8');
+        console.log(`Updated: ${filePath}`);
     }
 }
 
@@ -64,12 +80,7 @@ function processDirectory(dir) {
                 processDirectory(fullPath);
             }
         } else if (stat.isFile()) {
-            const ext = path.extname(item).toLowerCase();
-            const isEnvFile = item.startsWith('.env');
-            
-            if (validExtensions.includes(ext) || isEnvFile) {
-                processFile(fullPath);
-            }
+            processFile(fullPath);
         }
     }
 }

@@ -1,6 +1,6 @@
 # TransferApp
 
-TransferApp is a front-end-only schematic simulation of a vault transfer from a private network into a public blockchain. It uses mocked data, timers, and a local browser database (`localStorage`) only. No real wallet provider, blockchain, API, backend, or funds are involved.
+TransferApp is a front-end-only schematic live of a vault transfer from a private network into a public blockchain. It uses mocked data, timers, and a local browser database (`localStorage`) only. No real wallet provider, blockchain, API, backend, or funds are involved.
 
 ## Run locally
 
@@ -17,4 +17,4 @@ Push this directory to GitHub, import the repository in Vercel, and use the defa
 
 ## Edit mock data
 
-Mock vaults, transfer stages, durations, permissions, the configured admin wallet, and the 18-hour bridge window are in `lib/config.ts`. Shared persisted state and per-wallet transfer records are in `store/transfer-store.ts` under the `transferapp-local-db` localStorage key. The Admin page's **Reset Demo** button clears the simulation state.
+Mock vaults, transfer stages, durations, permissions, the configured admin wallet, and the 18-hour bridge window are in `lib/config.ts`. Shared persisted state and per-wallet transfer records are in `store/transfer-store.ts` under the `transferapp-local-db` localStorage key. The Admin page's **Reset Live** button clears the live state.
